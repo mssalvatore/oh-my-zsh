@@ -30,6 +30,26 @@
 
 CURRENT_BG='NONE'
 
+### Git Status Icons/Symbols
+# Git info.
+ZSH_THEME_GIT_PROMPT_PREFIX=""
+ZSH_THEME_GIT_PROMPT_SUFFIX=""
+
+# Git status.
+ZSH_THEME_GIT_PROMPT_ADDED="+"
+ZSH_THEME_GIT_PROMPT_DELETED="−"
+ZSH_THEME_GIT_PROMPT_MODIFIED="*"
+ZSH_THEME_GIT_PROMPT_RENAMED=">"
+ZSH_THEME_GIT_PROMPT_UNMERGED="="
+ZSH_THEME_GIT_PROMPT_UNTRACKED="?"
+ZSH_THEME_GIT_PROMPT_STASHED="S"
+ZSH_THEME_GIT_PROMPT_AHEAD="↑"
+ZSH_THEME_GIT_PROMPT_BEHIND="↓"
+
+# Git sha.
+ZSH_THEME_GIT_PROMPT_SHA_BEFORE="["
+ZSH_THEME_GIT_PROMPT_SHA_AFTER="]"
+
 # Special Powerline characters
 
 () {
@@ -45,6 +65,7 @@ CURRENT_BG='NONE'
   # escape sequence with a single literal character.
   # Do not change this! Do not make it '\u2b80'; that is the old, wrong code point.
   SEGMENT_SEPARATOR=$'\ue0b0'
+  SEGMENT_SEPARATOR_RIGHT=$'\ue0b2'
 }
 
 # Begin a segment
@@ -63,6 +84,18 @@ prompt_segment() {
   [[ -n $3 ]] && echo -n $3
 }
 
+# Begin a segment
+# Takes 3 arguments, background, foreground, text.
+# rendering default background/foreground.
+prompt_segment_right() {
+  local bg fg
+  [[ -n $1 ]] && bg="%K{$1}" || bg="%k"
+  [[ -n $2 ]] && fg="%F{$2}" || fg="%f"
+  #echo -n " $SEGMENT_SEPARATOR_RIGHT%{$fg%} "
+  echo -n " %{%F{$1}%}$SEGMENT_SEPARATOR_RIGHT%{$bg%}%{$fg%} "
+  [[ -n $3 ]] && echo -n $3
+}
+
 # End the prompt, closing any open segments
 prompt_end() {
   if [[ -n $CURRENT_BG ]]; then
@@ -72,6 +105,11 @@ prompt_end() {
   fi
   echo -n "%{%f%}"
   CURRENT_BG=''
+}
+
+prompt_end_right() {
+  echo -n "%{%k%}"
+  echo -n "%{%f%}"
 }
 
 ### Prompt components
@@ -86,17 +124,30 @@ prompt_context() {
 
 # Git: branch/detached head, dirty status
 prompt_git() {
-  (( $+commands[git] )) || return
+
   local PL_BRANCH_CHAR
   () {
     local LC_ALL="" LC_CTYPE="en_US.UTF-8"
     PL_BRANCH_CHAR=$'\ue0a0'         # 
   }
-  local ref dirty mode repo_path
 
   if $(git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
+    local ref dirty mode repo_path
     repo_path=$(git rev-parse --git-dir 2>/dev/null)
-    dirty=$(parse_git_dirty)
+
+    if [[ $NO_GIT_PROMPT_STATUS -ne 1 ]]; then
+      local git_status="$(git_prompt_status)"
+    fi
+
+    if [[ -n $git_status ]]; then
+        git_status="[$git_status]"
+    fi
+
+    local dirty_regex="[$ZSH_THEME_GIT_PROMPT_DELETED$ZSH_THEME_GIT_PROMPT_ADDED$ZSH_THEME_GIT_PROMPT_MODIFIED$ZSH_THEME_GIT_PROMPT_RENAMED$ZSH_THEME_GIT_PROMPT_UNMERGED$ZSH_THEME_GIT_PROMPT_UNTRACKED]+" 
+    if $(echo "$git_status" | grep -E "$dirty_regex" &> /dev/null); then
+      dirty="true"
+    fi
+
     ref=$(git symbolic-ref HEAD 2> /dev/null) || ref="➦ $(git rev-parse --short HEAD 2> /dev/null)"
     if [[ -n $dirty ]]; then
       prompt_segment yellow black
@@ -112,46 +163,12 @@ prompt_git() {
       mode=" >R>"
     fi
 
-    setopt promptsubst
-    autoload -Uz vcs_info
-
-    zstyle ':vcs_info:*' enable git
-    zstyle ':vcs_info:*' get-revision true
-    zstyle ':vcs_info:*' check-for-changes true
-    zstyle ':vcs_info:*' stagedstr '✚'
-    zstyle ':vcs_info:*' unstagedstr '●'
-    zstyle ':vcs_info:*' formats ' %u%c'
-    zstyle ':vcs_info:*' actionformats ' %u%c'
-    vcs_info
-    echo -n "${ref/refs\/heads\//$PL_BRANCH_CHAR }${vcs_info_msg_0_%% }${mode}"
+    echo -n "${ref/refs\/heads\//$PL_BRANCH_CHAR }$git_status${mode}"
   fi
 }
 
-prompt_bzr() {
-    (( $+commands[bzr] )) || return
-    if (bzr status >/dev/null 2>&1); then
-        status_mod=`bzr status | head -n1 | grep "modified" | wc -m`
-        status_all=`bzr status | head -n1 | wc -m`
-        revision=`bzr log | head -n2 | tail -n1 | sed 's/^revno: //'`
-        if [[ $status_mod -gt 0 ]] ; then
-            prompt_segment yellow black
-            echo -n "bzr@"$revision "✚ "
-        else
-            if [[ $status_all -gt 0 ]] ; then
-                prompt_segment yellow black
-                echo -n "bzr@"$revision
-
-            else
-                prompt_segment green black
-                echo -n "bzr@"$revision
-            fi
-        fi
-    fi
-}
-
 prompt_hg() {
-  (( $+commands[hg] )) || return
-  local rev st branch
+  local rev status
   if $(hg id >/dev/null 2>&1); then
     if $(hg prompt >/dev/null 2>&1); then
       if [[ $(hg prompt "{status|unknown}") = "?" ]]; then
@@ -205,24 +222,72 @@ prompt_virtualenv() {
 prompt_status() {
   local symbols
   symbols=()
-  [[ $RETVAL -ne 0 ]] && symbols+="%{%F{red}%}✘"
+#  [[ $RETVAL -ne 0 ]] && symbols+="%{%F{red}%}✘"
   [[ $UID -eq 0 ]] && symbols+="%{%F{yellow}%}⚡"
-  [[ $(jobs -l | wc -l) -gt 0 ]] && symbols+="%{%F{cyan}%}⚙"
+#  [[ $(jobs -l | wc -l) -gt 0 ]] && symbols+="%{%F{cyan}%}⚙"
 
   [[ -n "$symbols" ]] && prompt_segment black default "$symbols"
 }
 
+# Status:
+# - was there an error
+# - are there background jobs?
+prompt_status_right() {
+  local symbols
+  symbols=()
+  [[ $RETVAL -ne 0 ]] && symbols+="%{%F{red}%}✘"
+  [[ $(jobs -l | wc -l) -gt 0 ]] && symbols+="%{%F{black}%}⚙"
+
+  [[ -n "$symbols" ]] && prompt_segment_right white white "$symbols"
+}
+
+function prompt_time_right {
+    local time="%* "
+    prompt_segment_right green black $time;
+}
+
+toggle_prompt_git_status() {
+  if [[ $NO_GIT_PROMPT_STATUS -ne 1 ]]; then
+    export NO_GIT_PROMPT_STATUS=1
+  else
+    export NO_GIT_PROMPT_STATUS=""
+  fi
+}
+
 ## Main prompt
 build_prompt() {
-  RETVAL=$?
   prompt_status
-  prompt_virtualenv
+  #prompt_virtualenv
   prompt_context
   prompt_dir
   prompt_git
-  prompt_bzr
   prompt_hg
   prompt_end
 }
 
+build_prompt_right() {
+    prompt_vim_right
+    prompt_status_right
+    prompt_time_right
+}
+
+
+#Global VIM_PROMPT variable
+VIM_PROMPT="NORMAL"
+function prompt_vim_right {
+    local mode="${${KEYMAP/vicmd/$VIM_PROMPT}/(main|viins)/}"
+    [[ -n $mode ]] && prompt_segment_right red white "$mode"
+}
+
+function zle-line-init zle-keymap-select {
+    RETVAL=$?
+    RPS1="$(build_prompt_right)"
+    zle reset-prompt
+}
+
 PROMPT='%{%f%b%k%}$(build_prompt) '
+
+#Setup Right Prompt
+zle -N zle-line-init
+zle -N zle-keymap-select
+
